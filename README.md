@@ -1,3 +1,5 @@
+![nanoLLaDA](logo.png)
+
 # nanoLLaDA
 
 The minimal masked diffusion language model. Train your own [LLaDA](https://arxiv.org/abs/2502.09992) from scratch with just a few files.
