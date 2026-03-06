@@ -1,0 +1,32 @@
+[project]
+name = "nanollada"
+version = "0.1.0"
+description = "the minimal masked diffusion language model"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pyarrow>=15.0.0",
+    "regex>=2024.0.0",
+    "requests>=2.31.0",
+    "rustbpe>=0.1.0",
+    "tiktoken>=0.11.0",
+    "torch>=2.5.0",
+    "wandb>=0.21.0",
+    "filelock>=3.13.0",
+    "numpy>=1.26.0",
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu124", extra = "gpu" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[project.optional-dependencies]
+gpu = [
+    "torch>=2.5.0",
+]
