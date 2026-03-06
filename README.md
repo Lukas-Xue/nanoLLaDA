@@ -2,7 +2,7 @@
 
 The minimal masked diffusion language model. Train your own [LLaDA](https://arxiv.org/abs/2502.09992) from scratch with just a few files.
 
-Part of the **nano** series — making language models easy and affordable.
+Inspired by Karpathy's [nano series](https://github.com/karpathy/nanochat) — making language models easy and affordable.
 
 ## What is This?
 
