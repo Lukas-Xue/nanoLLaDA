@@ -123,7 +123,7 @@ orig_model = model  # uncompiled, un-DDP'd model for checkpointing and inference
 if ddp:
     from torch.nn.parallel import DistributedDataParallel as DDP
     model = DDP(model, device_ids=[ddp_local_rank])
-model = torch.compile(model, dynamic=False)
+model = torch.compile(model, dynamic=True)
 
 # Param counts
 num_params = sum(p.numel() for p in model.parameters())
@@ -159,9 +159,11 @@ def get_param_groups(model):
     ]
 
 optimizer = torch.optim.AdamW(get_param_groups(model), lr=args.lr, betas=(args.beta1, args.beta2), fused=True)
-if resuming:
+if resuming and optimizer_data is not None:
     optimizer.load_state_dict(optimizer_data)
     del optimizer_data
+elif resuming:
+    print0("WARNING: No optimizer state found, resuming with fresh optimizer")
 
 for group in optimizer.param_groups:
     group["initial_lr"] = group["lr"]
