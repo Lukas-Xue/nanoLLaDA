@@ -34,6 +34,7 @@ from nanollada.common import (
 from nanollada.tokenizer import get_tokenizer, get_token_bytes
 from nanollada.checkpoint import save_checkpoint, load_checkpoint
 from nanollada.generate import generate
+from nanollada.diffusion import forward_process, compute_diffusion_loss
 
 # -----------------------------------------------------------------------------
 parser = argparse.ArgumentParser(description="Pretrain masked diffusion LM")
@@ -189,35 +190,6 @@ input_ids, dataloader_state_dict = next(train_loader)
 # Validation loader builder
 def build_val_loader():
     return distributed_data_loader(tokenizer, args.device_batch_size, args.max_seq_len, split="val", device=device)
-
-# -----------------------------------------------------------------------------
-# LLaDA forward process: randomly mask tokens
-def forward_process(input_ids, mask_id, eps=1e-3):
-    b, l = input_ids.shape
-    t = torch.rand(b, device=input_ids.device)
-    p_mask = (1 - eps) * t + eps  # mask ratio in [eps, 1]
-    p_mask = p_mask[:, None].expand(b, l)
-    masked_indices = torch.rand((b, l), device=input_ids.device) < p_mask
-    # Never mask position 0 (BOS token) — it anchors the sequence context
-    masked_indices[:, 0] = False
-    noisy_batch = torch.where(masked_indices, mask_id, input_ids)
-    return noisy_batch, masked_indices, p_mask
-
-# LLaDA loss: cross_entropy on masked positions, weighted by 1/mask_ratio
-def compute_diffusion_loss(model, input_ids, mask_id):
-    # 1% of data: random length (as in LLaDA guidelines)
-    if torch.rand(1).item() < 0.01:
-        random_length = torch.randint(1, input_ids.shape[1] + 1, (1,)).item()
-        input_ids = input_ids[:, :random_length]
-
-    noisy_batch, masked_indices, p_mask = forward_process(input_ids, mask_id)
-    logits = model(noisy_batch)
-
-    token_loss = F.cross_entropy(
-        logits[masked_indices], input_ids[masked_indices], reduction='none'
-    ) / p_mask[masked_indices]
-    loss = token_loss.sum() / (input_ids.shape[0] * input_ids.shape[1])
-    return loss
 
 # -----------------------------------------------------------------------------
 # Eval: compute validation loss
