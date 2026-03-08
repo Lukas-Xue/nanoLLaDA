@@ -1,12 +1,12 @@
-# nanoLLaDA
-
-<p align="center"><img src="logo.png" width="200" alt="nanoLLaDA"></p>
+# <img src="logo.png" width="300" alt="nanoLLaDA">
 
 A minimal implementation of [LLaDA](https://arxiv.org/abs/2502.09992) — the masked diffusion language model — built for learning and experimentation.
 
 Part of the **nano** series, inspired by Karpathy's [nanoChat](https://github.com/karpathy/nanochat). ~500 lines of core code. Trains on 4 GPUs.
 
-> **🚧 Early stage.** This repo covers **pretraining and generation** only. SFT, evaluation, and VRPO from the LLaDA paper are not yet implemented. Contributions welcome — we're all learning together! 🙌
+> **🚧 Early stage.** This repo covers **pretraining and generation** only. SFT, evaluation, and VRPO from the LLaDA paper are not yet implemented. Contributions welcome — we're all learning together!
+
+**New to diffusion language models?** Check out [`tutorial.ipynb`](tutorial.ipynb) for a complete walkthrough — it downloads data, trains a tokenizer, trains a small model, and generates text, all from scratch.
 
 ## The Big Idea
 
@@ -66,13 +66,17 @@ d12 for fast experiments, d20 for serious training.
 nanollada/
   model.py        # Bidirectional transformer (is_causal=False)
   generate.py     # Iterative unmasking generation
+  diffusion.py    # Forward process and training loss
   dataloader.py   # Distributed data loading
+  dataset.py      # Dataset download (ClimbMix-400B)
   tokenizer.py    # BPE tokenizer with <|mask|> token
+  checkpoint.py   # Save/load with auto-cleanup
+  common.py       # Shared utilities (DDP, device detection)
 scripts/
   train.py        # Pretraining (DDP, grad accum, checkpointing)
   inference.py    # Generate text from a checkpoint
   tok_train.py    # Train the tokenizer
-tutorial_nanollada.py  # Interactive walkthrough (Jupyter-compatible)
+tutorial.ipynb    # Interactive end-to-end walkthrough
 ```
 
 ## What's Missing
