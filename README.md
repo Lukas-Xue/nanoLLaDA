@@ -1,8 +1,10 @@
-# <img src="logo.png" width="300" alt="nanoLLaDA">
+# <img src="assets/logo.png" width="300" alt="nanoLLaDA">
 
 A minimal implementation of [LLaDA](https://arxiv.org/abs/2502.09992) — the masked diffusion language model — built for learning and experimentation.
 
 Part of the **nano** series, inspired by Karpathy's [nanoChat](https://github.com/karpathy/nanochat). ~500 lines of core code. Trains on 4 GPUs.
+
+![Diffusion Demo](assets/diffusion_demo.gif)
 
 > **🚧 Early stage.** This repo covers **pretraining and generation** only. SFT, evaluation, and VRPO from the LLaDA paper are not yet implemented. Contributions welcome — we're all learning together!
 

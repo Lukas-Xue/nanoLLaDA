@@ -116,3 +116,87 @@ def generate(model, prompt, mask_id, steps=128, gen_length=128, block_length=Non
             x[transfer_index] = x0[transfer_index]
 
     return x
+
+
+def generate_visual(model, prompt, mask_id, steps=128, gen_length=128, block_length=None,
+                    temperature=0., cfg_scale=0., remasking='low_confidence'):
+    """
+    Same as generate(), but yields (step, total_steps, x) at each unmasking step
+    for visualization. Use with torch.no_grad() externally.
+
+    Yields:
+        (step, total_steps, x): step index (0 = initial all-masked state),
+        total number of steps, and current sequence tensor (B, L+gen_length).
+    """
+    if block_length is None:
+        block_length = gen_length
+    assert gen_length % block_length == 0
+    num_blocks = gen_length // block_length
+    assert steps % num_blocks == 0
+    steps_per_block = steps // num_blocks
+
+    device = model.get_device()
+    B = prompt.shape[0]
+    x = torch.full((B, prompt.shape[1] + gen_length), mask_id, dtype=torch.long, device=device)
+    x[:, :prompt.shape[1]] = prompt.clone()
+    prompt_index = (x != mask_id)
+
+    # Pre-compute total actual steps across all blocks
+    total_steps = 0
+    for bi in range(num_blocks):
+        bs = prompt.shape[1] + bi * block_length
+        be = prompt.shape[1] + (bi + 1) * block_length
+        bm = (x[:, bs:be] == mask_id)
+        total_steps += get_num_transfer_tokens(bm, steps_per_block).shape[1]
+
+    global_step = 0
+    yield global_step, total_steps, x.clone()
+
+    for block_idx in range(num_blocks):
+        block_start = prompt.shape[1] + block_idx * block_length
+        block_end = prompt.shape[1] + (block_idx + 1) * block_length
+
+        block_mask = (x[:, block_start:block_end] == mask_id)
+        num_transfer_tokens = get_num_transfer_tokens(block_mask, steps_per_block)
+        actual_steps = num_transfer_tokens.shape[1]
+
+        for i in range(actual_steps):
+            mask_index = (x == mask_id)
+
+            if cfg_scale > 0.:
+                un_x = x.clone()
+                un_x[prompt_index] = mask_id
+                x_ = torch.cat([x, un_x], dim=0)
+                logits = model(x_)
+                logits, un_logits = torch.chunk(logits, 2, dim=0)
+                logits = un_logits + (cfg_scale + 1) * (logits - un_logits)
+            else:
+                logits = model(x)
+
+            logits_with_noise = add_gumbel_noise(logits, temperature=temperature)
+            x0 = torch.argmax(logits_with_noise, dim=-1)
+
+            if remasking == 'low_confidence':
+                p = F.softmax(logits, dim=-1)
+                x0_p = torch.gather(p, dim=-1, index=x0.unsqueeze(-1)).squeeze(-1)
+            elif remasking == 'random':
+                x0_p = torch.rand(x0.shape, device=device)
+            else:
+                raise ValueError(f"Unknown remasking strategy: {remasking}")
+
+            x0_p[:, :block_start] = -float('inf')
+            x0_p[:, block_end:] = -float('inf')
+
+            x0 = torch.where(mask_index, x0, x)
+            confidence = torch.where(mask_index, x0_p, -float('inf'))
+
+            transfer_index = torch.zeros_like(x0, dtype=torch.bool)
+            for j in range(B):
+                k = num_transfer_tokens[j, i].item()
+                if k > 0:
+                    _, select_index = torch.topk(confidence[j], k=k)
+                    transfer_index[j, select_index] = True
+            x[transfer_index] = x0[transfer_index]
+
+            global_step += 1
+            yield global_step, total_steps, x.clone()
