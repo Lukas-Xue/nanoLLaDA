@@ -1,4 +1,4 @@
-# <img src="assets/logo.png" width="300" alt="nanoLLaDA">
+# <img src="assets/logo.png" width="500" alt="nanoLLaDA">
 
 A minimal implementation of [LLaDA](https://arxiv.org/abs/2502.09992) — the masked diffusion language model — built for learning and experimentation.
 
