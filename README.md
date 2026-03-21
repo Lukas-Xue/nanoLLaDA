@@ -6,7 +6,7 @@ Part of the **nano** series, inspired by Karpathy's [nanoChat](https://github.co
 
 ![Diffusion Demo](assets/diffusion_demo.gif)
 
-> **🚧 Early stage.** This repo covers **pretraining and generation** only. SFT, evaluation, and VRPO from the LLaDA paper are not yet implemented. Contributions welcome — we're all learning together!
+> **🚧 Early stage.** This repo covers **pretraining, generation, and evaluation**. SFT and VRPO from the LLaDA paper are not yet implemented. Contributions welcome — we're all learning together!
 
 **New to diffusion language models?** Check out [`tutorial.ipynb`](tutorial.ipynb) for a complete walkthrough — it downloads data, trains a tokenizer, trains a small model, and generates text, all from scratch.
 
@@ -69,6 +69,7 @@ nanollada/
   model.py        # Bidirectional transformer (is_causal=False)
   generate.py     # Iterative unmasking generation
   diffusion.py    # Forward process and training loss
+  eval.py         # MC log-likelihood, CORE benchmark evaluation
   dataloader.py   # Distributed data loading
   dataset.py      # Dataset download (ClimbMix-400B)
   tokenizer.py    # BPE tokenizer with <|mask|> token
@@ -76,17 +77,73 @@ nanollada/
   common.py       # Shared utilities (DDP, device detection)
 scripts/
   train.py        # Pretraining (DDP, grad accum, checkpointing)
+  eval.py         # Evaluate: val loss, CORE benchmark, samples
   inference.py    # Generate text from a checkpoint
   tok_train.py    # Train the tokenizer
 tutorial.ipynb    # Interactive end-to-end walkthrough
 ```
+
+## Evaluation
+
+```bash
+# All evals: validation loss + CORE benchmark + samples
+torchrun --nproc_per_node=4 -m scripts.eval
+
+# Quick test (fewer MC samples, limited examples)
+python -m scripts.eval --eval core --mc-num 8 --max-per-task 50
+
+# Just validation loss
+python -m scripts.eval --eval val
+
+# Just samples
+python -m scripts.eval --eval sample --gen-length 128 --gen-steps 128
+```
+
+The CORE benchmark (from the [DCLM paper](https://arxiv.org/abs/2406.11794)) evaluates in-context learning across 22 tasks using three methods:
+- **Multiple choice** (11 tasks): score each answer option via ELBO, pick lowest loss
+- **Schema** (2 tasks): score each context option with a shared continuation via ELBO
+- **Language modeling** (9 tasks): check if greedy one-shot unmasking produces the exact continuation
+
+`--mc-num` controls accuracy vs speed: 32 is a good default, 128 matches the LLaDA paper, 8 is fine for quick sanity checks.
+
+### CORE Results — d20 (477M params, step 34000)
+
+Trained on ClimbMix-400B for ~4 days on 4× L4 GPUs. Val diffusion loss: 3.19. Evaluated with `--mc-num 32 --max-per-task 500`.
+
+| Task | Type | Accuracy | Centered |
+|---|---|---|---|
+| bigbench_cs_algorithms | lm | 77.2% | +0.772 |
+| lambada_openai | lm | 56.2% | +0.562 |
+| arc_easy | mc | 51.4% | +0.352 |
+| bigbench_qa_wikidata | lm | 28.8% | +0.288 |
+| commonsense_qa | mc | 39.0% | +0.238 |
+| piqa | mc | 60.2% | +0.204 |
+| bigbench_language_identification | mc | 24.0% | +0.164 |
+| copa | mc | 57.0% | +0.140 |
+| winograd | schema | 54.9% | +0.099 |
+| jeopardy | lm | 9.4% | +0.094 |
+| bigbench_operators | lm | 9.5% | +0.095 |
+| winogrande | schema | 54.0% | +0.080 |
+| bigbench_dyck_languages | lm | 7.4% | +0.074 |
+| hellaswag (10-shot) | mc | 28.0% | +0.040 |
+| squad | lm | 2.6% | +0.026 |
+| hellaswag (0-shot) | mc | 26.6% | +0.021 |
+| agi_eval_lsat_ar | mc | 20.0% | 0.000 |
+| bigbench_repeat_copy_logic | lm | 0.0% | 0.000 |
+| coqa | lm | 0.0% | 0.000 |
+| arc_challenge | mc | 22.4% | −0.035 |
+| openbook_qa | mc | 20.2% | −0.064 |
+| boolq | mc | 56.6% | −0.142 |
+| **CORE** | | | **0.137** |
+
+For context, this is a 477M parameter base model (no SFT) trained from scratch — not a fine-tuned LLaDA-8B. The CORE metric uses the same benchmark and centering as [nanoChat](https://github.com/karpathy/nanochat), so scores are directly comparable between autoregressive and diffusion models at the same scale.
 
 ## What's Missing
 
 From the [LLaDA paper](https://arxiv.org/abs/2502.09992) and follow-ups:
 
 - **SFT** — only mask the response, not the prompt ([guidelines](https://github.com/ML-GSAI/LLaDA/blob/main/GUIDELINES.md#sft))
-- **Evaluation** — benchmarks like MMLU, GSM8K, HumanEval
+- **More benchmarks** — generation-based evals like GSM8K, HumanEval (need `generate_until`)
 - **VRPO** — preference alignment from [LLaDA 1.5](https://ml-gsai.github.io/LLaDA-1.5-Demo/)
 - **Faster inference** — block diffusion, consistency distillation, caching
 
