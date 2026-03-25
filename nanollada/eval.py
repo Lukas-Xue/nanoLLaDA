@@ -9,6 +9,10 @@ Supports three CORE task types:
   - multiple_choice: vary the answer, pick lowest ELBO
   - schema: vary the context, same continuation, pick lowest ELBO
   - language_modeling: check if greedy unmasking produces the exact continuation
+
+Supports two prompt formats:
+  - chat_format=False (default): raw text, for base models
+  - chat_format=True: "User: ...\\nAssistant: ..." wrapper, for SFT models
 """
 
 import random
@@ -65,12 +69,9 @@ def mc_loglikelihood(model, input_ids, prompt_len, mask_id, mc_num=32, mc_batch=
 def greedy_unmask_matches(model, input_ids, prompt_len, mask_id):
     """
     Check if greedy one-step unmasking of the continuation matches the target.
-    This is the diffusion analogue of checking greedy autoregressive prediction.
-
     Masks all continuation tokens, runs one forward pass, checks if argmax
     at each masked position matches the original token.
     """
-    device = input_ids.device
     seq = input_ids.clone()
     target = seq[0, prompt_len:].clone()
     seq[0, prompt_len:] = mask_id
@@ -115,10 +116,8 @@ def _tokenize_and_split(tokenizer, full_text, prompt_text, max_seq_len):
     tokens = tokenizer.encode(full_text, prepend=tokenizer.get_bos_token_id())
     prompt_tokens = tokenizer.encode(prompt_text, prepend=tokenizer.get_bos_token_id())
     prompt_len = len(prompt_tokens)
-    # Ensure at least 1 continuation token
     if prompt_len >= len(tokens):
         prompt_len = max(len(tokens) - 1, 1)
-    # Truncate from the left (keep the end which has the answer)
     if len(tokens) > max_seq_len:
         excess = len(tokens) - max_seq_len
         tokens = tokens[excess:]
@@ -126,7 +125,7 @@ def _tokenize_and_split(tokenizer, full_text, prompt_text, max_seq_len):
     return tokens, prompt_len
 
 
-def _build_fewshot_prefix(data, idx, num_fewshot, task_type):
+def _build_fewshot_prefix(data, idx, num_fewshot, task_type, chat_format=False):
     """Build a few-shot prefix string from examples, excluding the current item."""
     if num_fewshot <= 0:
         return ""
@@ -137,11 +136,23 @@ def _build_fewshot_prefix(data, idx, num_fewshot, task_type):
     for fi in fs_indices:
         ex = data[fi]
         if task_type == 'multiple_choice':
-            prefix += f"{ex['query']} {ex['choices'][ex['gold']]}\n\n"
+            q, a = ex['query'], ex['choices'][ex['gold']]
+            if chat_format:
+                prefix += f"User: {q}\nAssistant: {a}\n"
+            else:
+                prefix += f"{q} {a}\n\n"
         elif task_type == 'schema':
-            prefix += f"{ex['context_options'][ex['gold']]} {ex['continuation']}\n\n"
+            ctx, cont = ex['context_options'][ex['gold']], ex['continuation']
+            if chat_format:
+                prefix += f"User: {ctx}\nAssistant: {cont}\n"
+            else:
+                prefix += f"{ctx} {cont}\n\n"
         elif task_type == 'language_modeling':
-            prefix += f"{ex['context']} {ex['continuation']}\n\n"
+            ctx, cont = ex['context'], ex['continuation']
+            if chat_format:
+                prefix += f"User: {ctx}\nAssistant: {cont}\n"
+            else:
+                prefix += f"{ctx} {cont}\n\n"
     return prefix
 
 
@@ -152,33 +163,38 @@ def _build_fewshot_prefix(data, idx, num_fewshot, task_type):
 def evaluate_example(model, tokenizer, item, mask_id, device, task_type,
                      mc_num=32, mc_batch=8, num_fewshot=0,
                      fewshot_pool=None, idx=0, max_seq_len=1024,
-                     continuation_delimiter=" "):
+                     continuation_delimiter=" ", chat_format=False):
     """
     Evaluate a single example. Dispatches to the right logic based on task_type.
     Returns True if correct.
     """
-    prefix = _build_fewshot_prefix(fewshot_pool or [], idx, num_fewshot, task_type)
+    prefix = _build_fewshot_prefix(fewshot_pool or [], idx, num_fewshot, task_type,
+                                   chat_format=chat_format)
 
     if task_type == 'multiple_choice':
         return _eval_mc(model, tokenizer, item, mask_id, device, prefix,
-                        mc_num, mc_batch, max_seq_len)
+                        mc_num, mc_batch, max_seq_len, chat_format)
     elif task_type == 'schema':
         return _eval_schema(model, tokenizer, item, mask_id, device, prefix,
-                            mc_num, mc_batch, max_seq_len, continuation_delimiter)
+                            mc_num, mc_batch, max_seq_len, continuation_delimiter, chat_format)
     elif task_type == 'language_modeling':
         return _eval_lm(model, tokenizer, item, mask_id, device, prefix,
-                        max_seq_len, continuation_delimiter)
+                        max_seq_len, continuation_delimiter, chat_format)
     else:
         raise ValueError(f"Unknown task_type: {task_type}")
 
 
 def _eval_mc(model, tokenizer, item, mask_id, device, prefix,
-             mc_num, mc_batch, max_seq_len):
+             mc_num, mc_batch, max_seq_len, chat_format):
     """Multiple choice: vary the answer, pick lowest ELBO."""
     scores = []
     for choice in item['choices']:
-        full = prefix + item['query'] + " " + choice
-        prompt = prefix + item['query']
+        if chat_format:
+            full = prefix + f"User: {item['query']}\nAssistant: {choice}"
+            prompt = prefix + f"User: {item['query']}\nAssistant:"
+        else:
+            full = prefix + item['query'] + " " + choice
+            prompt = prefix + item['query']
         tokens, prompt_len = _tokenize_and_split(tokenizer, full, prompt, max_seq_len)
         input_ids = torch.tensor([tokens], dtype=torch.long, device=device)
         scores.append(mc_loglikelihood(input_ids=input_ids, prompt_len=prompt_len,
@@ -188,13 +204,17 @@ def _eval_mc(model, tokenizer, item, mask_id, device, prefix,
 
 
 def _eval_schema(model, tokenizer, item, mask_id, device, prefix,
-                 mc_num, mc_batch, max_seq_len, continuation_delimiter):
+                 mc_num, mc_batch, max_seq_len, continuation_delimiter, chat_format):
     """Schema: vary the context, same continuation, pick lowest ELBO."""
     scores = []
     continuation = item['continuation']
     for ctx in item['context_options']:
-        full = prefix + ctx + continuation_delimiter + continuation
-        prompt = prefix + ctx + continuation_delimiter
+        if chat_format:
+            full = prefix + f"User: {ctx}\nAssistant: {continuation}"
+            prompt = prefix + f"User: {ctx}\nAssistant:"
+        else:
+            full = prefix + ctx + continuation_delimiter + continuation
+            prompt = prefix + ctx + continuation_delimiter
         tokens, prompt_len = _tokenize_and_split(tokenizer, full, prompt, max_seq_len)
         input_ids = torch.tensor([tokens], dtype=torch.long, device=device)
         scores.append(mc_loglikelihood(input_ids=input_ids, prompt_len=prompt_len,
@@ -204,13 +224,16 @@ def _eval_schema(model, tokenizer, item, mask_id, device, prefix,
 
 
 def _eval_lm(model, tokenizer, item, mask_id, device, prefix,
-             max_seq_len, continuation_delimiter):
+             max_seq_len, continuation_delimiter, chat_format):
     """
     Language modeling: check if greedy unmasking produces the exact continuation.
-    This is the diffusion analogue of autoregressive greedy-match.
     """
-    full = prefix + item['context'] + continuation_delimiter + item['continuation']
-    prompt = prefix + item['context'] + continuation_delimiter
+    if chat_format:
+        full = prefix + f"User: {item['context']}\nAssistant: {item['continuation']}"
+        prompt = prefix + f"User: {item['context']}\nAssistant:"
+    else:
+        full = prefix + item['context'] + continuation_delimiter + item['continuation']
+        prompt = prefix + item['context'] + continuation_delimiter
     tokens, prompt_len = _tokenize_and_split(tokenizer, full, prompt, max_seq_len)
     input_ids = torch.tensor([tokens], dtype=torch.long, device=device)
     return greedy_unmask_matches(model, input_ids, prompt_len, mask_id)
@@ -221,7 +244,7 @@ def _eval_lm(model, tokenizer, item, mask_id, device, prefix,
 
 @torch.no_grad()
 def evaluate_task(model, tokenizer, data, mask_id, device, task_meta,
-                  mc_num=32, mc_batch=8, max_seq_len=1024):
+                  mc_num=32, mc_batch=8, max_seq_len=1024, chat_format=False):
     """
     Evaluate a task across all examples, distributed across ranks.
     Returns mean accuracy.
@@ -240,6 +263,7 @@ def evaluate_task(model, tokenizer, data, mask_id, device, task_meta,
             fewshot_pool=data, idx=idx,
             max_seq_len=max_seq_len,
             continuation_delimiter=task_meta.get('continuation_delimiter', ' '),
+            chat_format=chat_format,
         )
         correct[idx] = float(is_correct)
 

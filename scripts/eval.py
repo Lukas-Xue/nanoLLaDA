@@ -93,7 +93,7 @@ def find_checkpoint_dir(base_dir):
 # -----------------------------------------------------------------------------
 # CORE evaluation (adapted for diffusion)
 
-def evaluate_core(model, tokenizer, mask_id, device, mc_num=32, mc_batch=8, max_per_task=-1):
+def evaluate_core(model, tokenizer, mask_id, device, mc_num=32, mc_batch=8, max_per_task=-1, chat_format=False):
     """
     Evaluate on the CORE benchmark using ELBO-based multiple-choice scoring.
     Same task data as nanochat, but scored via diffusion likelihood instead of
@@ -149,6 +149,7 @@ def evaluate_core(model, tokenizer, mask_id, device, mc_num=32, mc_batch=8, max_
             model, tokenizer, data, mask_id, device, task_meta,
             mc_num=mc_num, mc_batch=mc_batch,
             max_seq_len=model.config.sequence_len,
+            chat_format=chat_format,
         )
 
         results[label] = accuracy
@@ -180,6 +181,8 @@ def main():
     parser.add_argument('--mc-num', type=int, default=32, help='MC samples for likelihood')
     parser.add_argument('--mc-batch', type=int, default=8, help='MC batch size')
     parser.add_argument('--max-per-task', type=int, default=-1, help='-1 = all')
+    parser.add_argument('--chat-format', action='store_true',
+                        help='Wrap prompts in User/Assistant format (use for SFT models)')
     # Sampling
     parser.add_argument('--gen-length', type=int, default=64)
     parser.add_argument('--gen-steps', type=int, default=64)
@@ -221,11 +224,18 @@ def main():
         print0("\n" + "=" * 70)
         print0("Samples (iterative unmasking)")
         print0("=" * 70)
-        prompts = [
-            "The capital of France is",
-            "The chemical symbol of gold is",
-            "The planets of the solar system are:",
-        ]
+        if args.chat_format:
+            prompts = [
+                "User: What is the capital of France?\nAssistant:",
+                "User: What is the chemical symbol of gold?\nAssistant:",
+                "User: List the planets of the solar system.\nAssistant:",
+            ]
+        else:
+            prompts = [
+                "The capital of France is",
+                "The chemical symbol of gold is",
+                "The planets of the solar system are:",
+            ]
         for prompt_text in prompts:
             tokens = tokenizer.encode(prompt_text, prepend=tokenizer.get_bos_token_id())
             prompt_tensor = torch.tensor([tokens], dtype=torch.long, device=device)
@@ -257,6 +267,7 @@ def main():
             model, tokenizer, mask_id, device,
             mc_num=args.mc_num, mc_batch=args.mc_batch,
             max_per_task=args.max_per_task,
+            chat_format=args.chat_format,
         )
 
         if ddp_rank == 0:

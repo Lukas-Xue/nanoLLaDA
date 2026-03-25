@@ -69,14 +69,16 @@ nanollada/
   model.py        # Bidirectional transformer (is_causal=False)
   generate.py     # Iterative unmasking generation
   diffusion.py    # Forward process and training loss
+  sft.py          # SFT diffusion loss (only masks response tokens)
   eval.py         # MC log-likelihood, CORE benchmark evaluation
   dataloader.py   # Distributed data loading
   dataset.py      # Dataset download (ClimbMix-400B)
-  tokenizer.py    # BPE tokenizer with <|mask|> token
+  tokenizer.py    # BPE tokenizer with <|bos|>, <|eos|>, <|mask|>
   checkpoint.py   # Save/load with auto-cleanup
   common.py       # Shared utilities (DDP, device detection)
 scripts/
   train.py        # Pretraining (DDP, grad accum, checkpointing)
+  sft.py          # Supervised fine-tuning (SmolTalk + MMLU + GSM8K)
   eval.py         # Evaluate: val loss, CORE benchmark, samples
   inference.py    # Generate text from a checkpoint
   tok_train.py    # Train the tokenizer
@@ -106,44 +108,54 @@ The CORE benchmark (from the [DCLM paper](https://arxiv.org/abs/2406.11794)) eva
 
 `--mc-num` controls accuracy vs speed: 32 is a good default, 128 matches the LLaDA paper, 8 is fine for quick sanity checks.
 
-### CORE Results — d20 (477M params, step 34000)
+### CORE Results — d20-v2 Base (477M params, step 66400)
 
-Trained on ClimbMix-400B for ~4 days on 4× L4 GPUs. Val diffusion loss: 3.19. Evaluated with `--mc-num 32 --max-per-task 500`.
+Trained on ClimbMix-400B for ~55 hours on 4× L4 GPUs (~9.2B tokens, 20× Chinchilla ratio). Val diffusion loss: 3.02. Evaluated with `--mc-num 32 --max-per-task 500`.
 
 | Task | Type | Accuracy | Centered |
 |---|---|---|---|
-| bigbench_cs_algorithms | lm | 77.2% | +0.772 |
-| lambada_openai | lm | 56.2% | +0.562 |
-| arc_easy | mc | 51.4% | +0.352 |
-| bigbench_qa_wikidata | lm | 28.8% | +0.288 |
-| commonsense_qa | mc | 39.0% | +0.238 |
-| piqa | mc | 60.2% | +0.204 |
-| bigbench_language_identification | mc | 24.0% | +0.164 |
-| copa | mc | 57.0% | +0.140 |
-| winograd | schema | 54.9% | +0.099 |
-| jeopardy | lm | 9.4% | +0.094 |
-| bigbench_operators | lm | 9.5% | +0.095 |
-| winogrande | schema | 54.0% | +0.080 |
-| bigbench_dyck_languages | lm | 7.4% | +0.074 |
-| hellaswag (10-shot) | mc | 28.0% | +0.040 |
-| squad | lm | 2.6% | +0.026 |
-| hellaswag (0-shot) | mc | 26.6% | +0.021 |
-| agi_eval_lsat_ar | mc | 20.0% | 0.000 |
+| bigbench_cs_algorithms | lm | 76.4% | +0.764 |
+| lambada_openai | lm | 59.6% | +0.596 |
+| arc_easy | mc | 55.6% | +0.408 |
+| bigbench_qa_wikidata | lm | 31.0% | +0.310 |
+| piqa | mc | 58.0% | +0.160 |
+| bigbench_dyck_languages | lm | 17.8% | +0.178 |
+| bigbench_language_identification | mc | 25.4% | +0.179 |
+| copa | mc | 58.0% | +0.160 |
+| commonsense_qa | mc | 32.2% | +0.153 |
+| bigbench_operators | lm | 10.0% | +0.100 |
+| squad | lm | 7.0% | +0.070 |
+| hellaswag (0-shot) | mc | 30.2% | +0.069 |
+| hellaswag (10-shot) | mc | 30.2% | +0.069 |
+| winograd | schema | 53.1% | +0.062 |
+| agi_eval_lsat_ar | mc | 24.8% | +0.060 |
 | bigbench_repeat_copy_logic | lm | 0.0% | 0.000 |
 | coqa | lm | 0.0% | 0.000 |
-| arc_challenge | mc | 22.4% | −0.035 |
-| openbook_qa | mc | 20.2% | −0.064 |
-| boolq | mc | 56.6% | −0.142 |
-| **CORE** | | | **0.137** |
+| winogrande | schema | 48.6% | −0.028 |
+| arc_challenge | mc | 22.2% | −0.037 |
+| openbook_qa | mc | 17.4% | −0.101 |
+| boolq | mc | 47.2% | −0.390 |
+| **CORE** | | | **0.131** |
 
-For context, this is a 477M parameter base model (no SFT) trained from scratch — not a fine-tuned LLaDA-8B. The CORE metric uses the same benchmark and centering as [nanoChat](https://github.com/karpathy/nanochat), so scores are directly comparable between autoregressive and diffusion models at the same scale.
+### SFT Results — d20-v2 SFT (477M params)
+
+Fine-tuned on SmolTalk + MMLU×3 + GSM8K×4 (~359K conversations) for 4000 steps. The SFT model follows the `User: ...\nAssistant: ...` conversation format and uses `<|eos|>` to signal end of response.
+
+| Metric | Base | SFT (raw) | SFT (chat) |
+|---|---|---|---|
+| CORE | 0.131 | 0.125 | 0.067 |
+| Val loss | 3.02 | — | — |
+| SFT val loss | — | 0.39 | — |
+
+SFT slightly lowers CORE scores — this is expected and matches the behavior of autoregressive models. CORE measures base in-context learning via ELBO scoring, not instruction following. SFT models should be evaluated with generation-based benchmarks (ChatCORE), which is not yet implemented for diffusion models.
+
+For context, this is a 477M parameter model trained from scratch — not a fine-tuned LLaDA-8B. The CORE metric uses the same benchmark and centering as [nanoChat](https://github.com/karpathy/nanochat), so scores are directly comparable between autoregressive and diffusion models at the same scale.
 
 ## What's Missing
 
 From the [LLaDA paper](https://arxiv.org/abs/2502.09992) and follow-ups:
 
-- **SFT** — only mask the response, not the prompt ([guidelines](https://github.com/ML-GSAI/LLaDA/blob/main/GUIDELINES.md#sft))
-- **More benchmarks** — generation-based evals like GSM8K, HumanEval (need `generate_until`)
+- **ChatCORE** — generation-based evaluation for SFT models (generate answers, check correctness)
 - **VRPO** — preference alignment from [LLaDA 1.5](https://ml-gsai.github.io/LLaDA-1.5-Demo/)
 - **Faster inference** — block diffusion, consistency distillation, caching
 

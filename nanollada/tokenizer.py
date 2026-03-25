@@ -6,6 +6,7 @@ from functools import lru_cache
 
 SPECIAL_TOKENS = [
     "<|bos|>",
+    "<|eos|>",   # end of sequence / padding for SFT
     "<|mask|>",  # the mask token for diffusion
 ]
 
@@ -59,6 +60,9 @@ class RustBPETokenizer:
 
     def get_mask_token_id(self):
         return self.encode_special("<|mask|>")
+
+    def get_eos_token_id(self):
+        return self.encode_special("<|eos|>")
 
     def encode(self, text, prepend=None, append=None, num_threads=8):
         if prepend is not None:
